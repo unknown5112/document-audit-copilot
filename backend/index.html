@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cloud Document AI Copilot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-6 md:p-10 flex flex-col items-center">
+  <div class="max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl">
+    <div class="flex items-center justify-between mb-2">
+      <h1 class="text-xl font-bold text-sky-400">Cloud Document Audit Copilot</h1>
+      <span class="text-xs px-2 py-1 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">Live RAG</span>
+    </div>
+    <p class="text-xs text-slate-400 mb-6">In-Memory Semantic Search & Grounded Synthesis</p>
+
+    <!-- Upload Box -->
+    <div class="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:border-sky-500 transition mb-6 bg-slate-950/40">
+      <input type="file" id="pdfInput" accept=".pdf" class="hidden" onchange="uploadFile()" />
+      <label for="pdfInput" class="cursor-pointer text-sm font-medium text-slate-300 hover:text-sky-400 block">
+        Click to select & index a text-based PDF
+      </label>
+      <div id="uploadStatus" class="text-xs mt-2 text-slate-400 font-mono"></div>
+    </div>
+
+    <!-- Search / Question -->
+    <div class="flex gap-2 mb-6">
+      <input type="text" id="queryInput" placeholder="Ask specific questions, numbers, or topics in the PDF..." 
+             class="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-sky-500 text-slate-100" />
+      <button onclick="askCopilot()" class="bg-sky-500 hover:bg-sky-600 px-5 py-2 rounded-lg font-medium text-sm transition">
+        Ask
+      </button>
+    </div>
+
+    <!-- Answer Box -->
+    <div id="resultBox" class="hidden bg-slate-800/60 border border-slate-700 rounded-lg p-4 space-y-3">
+      <div>
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Audit Verdict</h3>
+        <p id="answerText" class="text-sm leading-relaxed text-slate-200 whitespace-pre-wrap"></p>
+      </div>
+      <div id="sourceText" class="text-xs text-sky-400 pt-2 border-t border-slate-700 font-mono"></div>
+      
+      <!-- Debug preview of retrieved context -->
+      <details id="debugBox" class="text-xs text-slate-400 pt-1 border-t border-slate-800 hidden">
+        <summary class="cursor-pointer text-slate-400 hover:text-slate-200 py-1">View Retrieved Context Chunks</summary>
+        <div id="debugChunks" class="mt-2 space-y-2 p-2 bg-slate-950 rounded border border-slate-800 font-mono text-[11px] text-slate-300 max-h-48 overflow-y-auto"></div>
+      </details>
+    </div>
+  </div>
+
+  <script>
+    async function uploadFile() {
+      const file = document.getElementById('pdfInput').files[0];
+      if(!file) return;
+      const status = document.getElementById('uploadStatus');
+      status.className = "text-xs mt-2 text-sky-400 font-mono";
+      status.innerText = "Parsing & indexing text chunks in cloud memory...";
+      
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          status.className = "text-xs mt-2 text-red-400 font-mono";
+          status.innerText = "Error: " + (data.detail || "Upload failed");
+          return;
+        }
+        status.className = "text-xs mt-2 text-emerald-400 font-mono";
+        status.innerText = `Ready: ${data.filename} (${data.total_chunks} chunks indexed)`;
+      } catch (err) {
+        status.className = "text-xs mt-2 text-red-400 font-mono";
+        status.innerText = "Network Error: " + err.message;
+      }
+    }
+
+    async function askCopilot() {
+      const query = document.getElementById('queryInput').value;
+      if(!query) return;
+
+      const resultBox = document.getElementById('resultBox');
+      const answerText = document.getElementById('answerText');
+      const sourceText = document.getElementById('sourceText');
+      const debugBox = document.getElementById('debugBox');
+      const debugChunks = document.getElementById('debugChunks');
+
+      resultBox.classList.remove('hidden');
+      debugBox.classList.add('hidden');
+      answerText.className = "text-sm leading-relaxed text-slate-200 whitespace-pre-wrap";
+      answerText.innerText = "Scanning vector memory & generating grounded answer...";
+      sourceText.innerText = "";
+      debugChunks.innerHTML = "";
+
+      try {
+        const res = await fetch("/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query })
+        });
+        const data = await res.json();
+        
+        if (!res.ok) {
+          answerText.className = "text-sm leading-relaxed text-red-400";
+          answerText.innerText = "Error: " + (data.detail || "Query failed");
+          return;
+        }
+
+        answerText.innerText = data.answer;
+        
+        // Show sources
+        if (data.sources && data.sources.length) {
+          const pages = [...new Set(data.sources.map(s => s.page))].join(", ");
+          sourceText.innerText = `Grounding: Page(s) ${pages} | Model: ${data.model_used || "Auto-Selected"}`;
+        } else {
+          sourceText.innerText = "";
+        }
+
+        // Show retrieved context chunks for live verification
+        if (data.retrieved_chunks && data.retrieved_chunks.length > 0) {
+          debugBox.classList.remove('hidden');
+          debugChunks.innerHTML = data.retrieved_chunks
+            .map((c, i) => `<div class="p-1.5 border-b border-slate-800 last:border-0"><strong class="text-sky-400">Chunk ${i+1}:</strong> ${c}</div>`)
+            .join("");
+        }
+
+      } catch (err) {
+        answerText.className = "text-sm leading-relaxed text-red-400";
+        answerText.innerText = "Request failed: " + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
